@@ -21,11 +21,10 @@ package com.soebes.maven.extensions.deployer;
 
 import java.io.IOException;
 import java.util.List;
-
+import java.util.Properties;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
-
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.eventspy.AbstractEventSpy;
 import org.apache.maven.eventspy.EventSpy;
@@ -33,6 +32,8 @@ import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionEvent.Type;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.PluginExecution;
+import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.shared.transfer.artifact.deploy.ArtifactDeployerException;
@@ -65,6 +66,9 @@ public class MavenDeployer
     @Inject
     private ProjectInstaller projectInstaller;
 
+
+    public static final String SETTINGS_SKIP = "maven.deploy.skip";
+
     private boolean failure;
 
     public MavenDeployer()
@@ -82,7 +86,6 @@ public class MavenDeployer
 
     private void logDeployerVersion()
     {
-        LOGGER.info( "" );
         LOGGER.info( " --- maven-deployer-extension:{} --- ", MavenDeployerExtensionVersion.getVersion() );
     }
 
@@ -90,17 +93,17 @@ public class MavenDeployer
     public void onEvent( Object event )
         throws Exception
     {
-        try
+        // We are only interested in the ExecutionEvent.
+        if ( event instanceof ExecutionEvent )
         {
-            // We are only interested in the ExecutionEvent.
-            if ( event instanceof ExecutionEvent )
-            {
+            try {
                 executionEventHandler( (ExecutionEvent) event );
+            } catch (Throwable e) {
+                LOGGER.error("Failure to deploy project",e);
+                ((ExecutionEvent) event).getSession().getResult().addException(e);
+
             }
-        }
-        catch ( Exception e )
-        {
-            LOGGER.error( "Exception", e );
+
         }
     }
 
@@ -117,49 +120,55 @@ public class MavenDeployer
     }
 
     private void executionEventHandler( ExecutionEvent executionEvent )
-    {
-        Type type = executionEvent.getType();
-        switch ( type )
-        {
-            case ProjectDiscoveryStarted:
-                break;
-            case SessionStarted:
-                sessionStarted( executionEvent );
-                break;
-            case SessionEnded:
-                if ( this.failure )
-                {
-                    LOGGER.warn( "The Maven Deployer Extension will not be called based on previous errors." );
-                }
-                else
-                {
-                    sessionEnded( executionEvent );
-                }
-                break;
-            case ForkFailed:
-            case ForkedProjectFailed:
-            case MojoFailed:
-            case ProjectFailed:
-                // TODO: Can we find out more about the cause of failure?
-                LOGGER.debug( "Some failure has occured." );
-                this.failure = true;
-                break;
+            throws NoFileAssignedException, ArtifactInstallerException, IOException, ArtifactDeployerException, MojoFailureException, MojoExecutionException {
+        try {
+            Type type = executionEvent.getType();
+            switch ( type )
+            {
+                case ProjectDiscoveryStarted:
+                    break;
+                case SessionStarted:
+                    sessionStarted( executionEvent );
+                    break;
+                case SessionEnded:
+                    if ( this.failure )
+                    {
+                        LOGGER.warn( "The Maven Deployer Extension will not be called based on previous errors." );
+                    }
+                    else
+                    {
+                        sessionEnded( executionEvent );
+                    }
+                    break;
+                case ForkFailed:
+                case ForkedProjectFailed:
+                case MojoFailed:
+                case ProjectFailed:
+                    // TODO: Can we find out more about the cause of failure?
+                    LOGGER.debug( "Some failure has occured." );
+                    this.failure = true;
+                    break;
 
-            case ForkStarted:
-            case ForkSucceeded:
-            case ForkedProjectStarted:
-            case ForkedProjectSucceeded:
-            case MojoStarted:
-            case MojoSucceeded:
-            case MojoSkipped:
-            case ProjectStarted:
-            case ProjectSucceeded:
-            case ProjectSkipped:
-                break;
+                case ForkStarted:
+                case ForkSucceeded:
+                case ForkedProjectStarted:
+                case ForkedProjectSucceeded:
+                case MojoStarted:
+                case MojoSucceeded:
+                case MojoSkipped:
+                case ProjectStarted:
+                case ProjectSucceeded:
+                case ProjectSkipped:
+                    break;
 
-            default:
-                LOGGER.error( "executionEventHandler: {}", type );
-                break;
+                default:
+                    LOGGER.error( "executionEventHandler: {}", type );
+                    break;
+            }
+        } catch (Exception e) {
+            this.failure = true;
+            throw e;
+
         }
 
     }
@@ -170,7 +179,7 @@ public class MavenDeployer
      * @param executionEvent
      */
     private void sessionEnded( ExecutionEvent executionEvent )
-    {
+            throws NoFileAssignedException, ArtifactInstallerException, IOException, ArtifactDeployerException, MojoFailureException, MojoExecutionException {
         logDeployerVersion();
 
         if ( goalsContain( executionEvent, "install" ) )
@@ -190,7 +199,7 @@ public class MavenDeployer
     }
 
     private void installArtifacts( ExecutionEvent executionEvent )
-    {
+            throws NoFileAssignedException, ArtifactInstallerException, IOException {
         LOGGER.info( "" );
         LOGGER.info( "Installing artifacts..." );
         installProjects( executionEvent );
@@ -292,12 +301,31 @@ public class MavenDeployer
         }
     }
 
+
     private void deployProjects( ExecutionEvent executionEvent )
-    {
-        // Assumption is to have the distributionManagement in the top level
-        // pom file located.
-        ArtifactRepository repository =
-            executionEvent.getSession().getTopLevelProject().getDistributionManagementArtifactRepository();
+            throws NoFileAssignedException, ArtifactDeployerException, MojoFailureException, MojoExecutionException {
+
+
+        if (executionEvent.getSession().getSettings().isOffline()) {
+            throw new MojoFailureException("Cannot deploy in offline mode");
+        }
+
+        Properties executionProperties = buildProjectProperties(executionEvent);
+        if (Boolean.valueOf(executionProperties.getProperty(SETTINGS_SKIP))) {
+            LOGGER.info("Skipping deployment because {} was set to true.", SETTINGS_SKIP);
+            return;
+        }
+
+
+        ArtifactRepositoryResolver repoResolver = new ArtifactRepositoryResolver();
+        ArtifactRepository repository = repoResolver.resolveArtifactRepository(executionEvent, executionProperties);
+
+        Properties projectProperties = executionEvent.getSession().getTopLevelProject().getProperties();
+        boolean skip = Boolean.valueOf(projectProperties.getProperty(SETTINGS_SKIP, "false"));
+        if (skip) {
+            LOGGER.debug("Skipping deploy due to maven setting: {}", SETTINGS_SKIP);
+            return;
+        }
 
         List<MavenProject> sortedProjects = executionEvent.getSession().getProjectDependencyGraph().getSortedProjects();
         for ( MavenProject mavenProject : sortedProjects )
@@ -310,7 +338,7 @@ public class MavenDeployer
     }
 
     private void installProjects( ExecutionEvent exec )
-    {
+            throws NoFileAssignedException, ArtifactInstallerException, IOException {
         List<MavenProject> sortedProjects = exec.getSession().getProjectDependencyGraph().getSortedProjects();
         for ( MavenProject mavenProject : sortedProjects )
         {
@@ -324,44 +352,34 @@ public class MavenDeployer
 
     private void deployProject( ProjectBuildingRequest projectBuildingRequest, ProjectDeployerRequest deployRequest,
                                 ArtifactRepository repository )
-    {
-        try
-        {
-            projectDeployer.deploy( projectBuildingRequest, deployRequest, repository );
-        }
-        catch ( IllegalArgumentException e )
-        {
-            LOGGER.error( "IllegalArgumentException", e );
-        }
-        catch ( NoFileAssignedException e )
-        {
-            LOGGER.error( "NoFileAssignedException", e );
-        }
-        catch ( ArtifactDeployerException e )
-        {
-            LOGGER.error( "ArtifactDeployerException", e );
-        }
-
+            throws NoFileAssignedException, ArtifactDeployerException {
+        projectDeployer.deploy( projectBuildingRequest, deployRequest, repository );
     }
 
     private void installProject( ProjectBuildingRequest pbr, ProjectInstallerRequest pir )
-    {
-        try
-        {
-            projectInstaller.install( pbr, pir );
-        }
-        catch ( IOException e )
-        {
-            LOGGER.error( "IOException", e );
-        }
-        catch ( ArtifactInstallerException e )
-        {
-            LOGGER.error( "ArtifactInstallerException", e );
-        }
-        catch ( NoFileAssignedException e )
-        {
-            LOGGER.error( "NoFileAssignedException", e );
-        }
+            throws NoFileAssignedException, ArtifactInstallerException, IOException {
+        projectInstaller.install( pbr, pir );
     }
+
+
+    /**
+     * Loads the system properties and overwrites with any user properties (if they exist)
+     * @param executionEvent
+     * @return
+     */
+    protected Properties buildProjectProperties(final ExecutionEvent executionEvent) {
+        Properties props = executionEvent.getSession().getRequest().getSystemProperties();
+        if (props == null) {
+            props = new Properties();
+        }
+        if (executionEvent.getSession().getRequest().getUserProperties() != null ) {
+            props.putAll(executionEvent.getSession().getRequest().getUserProperties());
+        }
+
+
+        return props;
+
+    }
+
 
 }
