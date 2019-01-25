@@ -36,11 +36,23 @@
     </site>
   </distributionManagement>
   <scm>
-    <developerConnection>scm:git:ssh://git@github.com/khmarbaise/maven-deployer-extension.git</developerConnection>
-    <connection>scm:git:https://github.com/khmarbaise/maven-deployer-extension.git</connection>
-    <url>https://github.com/khmarbaise/maven-deployer-extension/</url>
-    <tag>HEAD</tag>
+    <connection>scm:git:ssh://git@stash.gaggle.net:7999/GAG/maven-deployer-extension.git</connection>
+    <developerConnection>scm:git:ssh://git@stash.gaggle.net:7999/GAG/maven-deployer-extension.git</developerConnection>
+    <url>https://stash.gaggle.net/projects/GAG/repos/maven-deployer-extension/browse</url>
   </scm>
+  <repositories>
+    <repository>
+      <id>gagglenexus</id>
+      <url>https://nexus.gaggle.net/content/repositories/public</url>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+        <updatePolicy>never</updatePolicy>
+      </snapshots>
+    </repository>
+  </repositories>
 
   <dependencies>
     <dependency>
