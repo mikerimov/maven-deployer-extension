@@ -372,9 +372,16 @@ public class MavenDeployer
         if (props == null) {
             props = new Properties();
         }
+
         if (executionEvent.getSession().getRequest().getUserProperties() != null ) {
             props.putAll(executionEvent.getSession().getRequest().getUserProperties());
         }
+
+        if (executionEvent.getSession().getTopLevelProject().getProperties() != null ) {
+            props.putAll(executionEvent.getProject().getProperties());
+        }
+
+
 
 
         return props;
